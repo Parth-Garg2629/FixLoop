@@ -1,0 +1,24 @@
+{
+  "name": "fixloop-mmp-project",
+  "version": "1.0.0",
+  "description": "��#\u0000 \u0000F\u0000i\u0000x\u0000L\u0000o\u0000o\u0000p\u0000\r\u0000 \u0000",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test-backend.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Parth-Garg2629/FixLoop.git"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Parth-Garg2629/FixLoop/issues"
+  },
+  "homepage": "https://github.com/Parth-Garg2629/FixLoop#readme",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.3.0"
+  }
+}
