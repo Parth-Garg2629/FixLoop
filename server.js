@@ -53,8 +53,8 @@ app.get('/api/stats', (req, res) => {
  */
 app.get('/api/issues', (req, res) => {
   try {
-    const { status, category, severity, search, sort } = req.query;
-    const issues = db.getAllIssues({ status, category, severity, search, sort });
+    const { status, category, severity, search, sort, hideClosed } = req.query;
+    const issues = db.getAllIssues({ status, category, severity, search, sort, hideClosed });
     res.json(issues);
   } catch (err) {
     console.error('Error fetching issues:', err);
@@ -241,6 +241,52 @@ app.post('/api/issues/:id/volunteer', (req, res) => {
   } catch (err) {
     console.error('Error adding volunteer:', err);
     res.status(500).json({ error: 'Failed to add volunteer' });
+  }
+});
+
+/**
+ * Endorse / +1 Support an issue directly
+ */
+app.post('/api/issues/:id/support', (req, res) => {
+  try {
+    const supporterName = req.body.supporterName || 'Campus Community Member';
+    const issue = db.supportIssue(req.params.id, supporterName);
+    if (!issue) {
+      return res.status(404).json({ error: 'Issue not found' });
+    }
+    res.json(issue);
+  } catch (err) {
+    console.error('Error supporting issue:', err);
+    res.status(500).json({ error: 'Failed to support issue' });
+  }
+});
+
+/**
+ * Delete / Clear all closed & verified resolved issues
+ */
+app.delete('/api/issues/resolved/all', (req, res) => {
+  try {
+    const result = db.deleteClosedIssues();
+    res.json({ success: true, deletedCount: result.deletedCount, message: `Removed ${result.deletedCount} resolved issues from database.` });
+  } catch (err) {
+    console.error('Error deleting resolved issues:', err);
+    res.status(500).json({ error: 'Failed to delete resolved issues' });
+  }
+});
+
+/**
+ * Delete a specific issue by ID
+ */
+app.delete('/api/issues/:id', (req, res) => {
+  try {
+    const deleted = db.deleteIssue(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Issue not found' });
+    }
+    res.json({ success: true, message: `Issue #${req.params.id} removed from board.`, issue: deleted });
+  } catch (err) {
+    console.error('Error deleting issue:', err);
+    res.status(500).json({ error: 'Failed to delete issue' });
   }
 });
 

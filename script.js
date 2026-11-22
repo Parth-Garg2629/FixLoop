@@ -2,6 +2,14 @@
  * FIXLOOP — Community-Powered Public Issue Verification Engine
  * Hybrid Client: Seamlessly connects to the REST Backend & SQLite Database,
  * with graceful offline fallback to LocalStorage if run standalone.
+ * 
+ * Features:
+ * - Full verification loop (2-vote verification rule)
+ * - Challenge mechanism reverting to In Progress
+ * - Smart duplicate merge
+ * - Direct +1 support endorsements on cards
+ * - Remove / Hide / Purge closed issues
+ * - CSV report export
  */
 
 (function () {
@@ -13,7 +21,6 @@
   const STORAGE_KEY = 'fixloop_data';
   let backendAvailable = false;
 
-  // Base Seed Data for College Campus Pilot
   const SEEDED_ISSUES = [
     {
       id: 'FL1001',
@@ -264,7 +271,8 @@
     category: 'ALL',
     severity: 'ALL',
     search: '',
-    sort: 'priority'
+    sort: 'priority',
+    hideClosed: false
   };
 
   let activeModalIssueId = null;
@@ -320,7 +328,6 @@
       }
     }
 
-    // Fallback: LocalStorage
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
@@ -343,6 +350,7 @@
     if (currentFilters.severity !== 'ALL') params.set('severity', currentFilters.severity);
     if (currentFilters.search) params.set('search', currentFilters.search);
     if (currentFilters.sort) params.set('sort', currentFilters.sort);
+    if (currentFilters.hideClosed) params.set('hideClosed', 'true');
 
     const [issuesRes, statsRes] = await Promise.all([
       fetch(`/api/issues?${params.toString()}`),
@@ -439,7 +447,7 @@
   }
 
   // ==========================================================================
-  // 4. ISSUE LIFECYCLE STATE TRANSITIONS
+  // 4. ISSUE LIFECYCLE & ACTIONS
   // ==========================================================================
 
   async function addReportAndCheckDuplicate(reportData) {
@@ -467,7 +475,6 @@
       }
     }
 
-    // Fallback: Local duplicate logic
     const duplicate = findDuplicateLocal(reportData.category, reportData.location);
 
     if (duplicate) {
@@ -799,6 +806,141 @@
     showToast(`Thank you, ${volunteerName}! Added to Community Watchers.`, 'success');
   }
 
+  /**
+   * DIRECT ENDORSEMENT / UPVOTE (+1 Support)
+   */
+  async function upvoteSupport(issueId, supporterName = 'Campus Community Member') {
+    if (backendAvailable) {
+      try {
+        const res = await fetch(`/api/issues/${issueId}/support`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ supporterName })
+        });
+        if (res.ok) {
+          await refreshDataFromBackend();
+          showToast(`+1 Support recorded for #${issueId}! Priority score increased.`, 'success');
+          return;
+        }
+      } catch (err) {
+        console.warn('Backend support call failed:', err);
+      }
+    }
+
+    const issue = appState.issues.find(i => i.id === issueId);
+    if (!issue) return;
+    issue.supports = (Number(issue.supports) || 0) + 1;
+    issue.createdHistory = issue.createdHistory || [];
+    issue.createdHistory.unshift({
+      id: 'hist-' + Date.now(),
+      status: issue.status,
+      badge: 'Support Added',
+      remark: `Endorsed by ${supporterName} (+3 priority score).`,
+      actor: supporterName,
+      timeLabel: 'Just now'
+    });
+    saveData();
+    renderAll();
+    showToast(`+1 Support recorded for #${issue.id}! Priority score increased.`, 'success');
+  }
+
+  /**
+   * REMOVE / ARCHIVE A SINGLE ISSUE
+   */
+  async function deleteIssue(issueId, confirmNeeded = true) {
+    if (confirmNeeded && !confirm(`Are you sure you want to remove issue #${issueId} from the board?`)) {
+      return;
+    }
+
+    if (backendAvailable) {
+      try {
+        const res = await fetch(`/api/issues/${issueId}`, { method: 'DELETE' });
+        if (res.ok) {
+          closeIssueDetail();
+          await refreshDataFromBackend();
+          showToast(`Issue #${issueId} removed from board.`, 'info');
+          return;
+        }
+      } catch (err) {
+        console.warn('Backend delete failed:', err);
+      }
+    }
+
+    appState.issues = appState.issues.filter(i => i.id !== issueId);
+    appState.reports = appState.reports.filter(r => r.issueId !== issueId);
+    appState.updates = appState.updates.filter(u => u.issueId !== issueId);
+    appState.verifications = appState.verifications.filter(v => v.issueId !== issueId);
+    appState.volunteers = appState.volunteers.filter(v => v.issueId !== issueId);
+    saveData();
+    closeIssueDetail();
+    renderAll();
+    showToast(`Issue #${issueId} removed from board.`, 'info');
+  }
+
+  /**
+   * BULK REMOVE / CLEAR ALL VERIFIED RESOLVED ISSUES
+   */
+  async function purgeResolvedIssues() {
+    if (!confirm('Are you sure you want to permanently clear all verified & closed issues from the board?')) {
+      return;
+    }
+
+    if (backendAvailable) {
+      try {
+        const res = await fetch('/api/issues/resolved/all', { method: 'DELETE' });
+        if (res.ok) {
+          const data = await res.json();
+          await refreshDataFromBackend();
+          showToast(data.message || 'Closed issues cleared from database.', 'info');
+          return;
+        }
+      } catch (err) {
+        console.warn('Backend bulk delete failed:', err);
+      }
+    }
+
+    const initial = appState.issues.length;
+    appState.issues = appState.issues.filter(i => i.status !== 'Verified Resolved');
+    const removed = initial - appState.issues.length;
+    saveData();
+    renderAll();
+    showToast(`Cleared ${removed} closed issue(s) from board.`, 'info');
+  }
+
+  /**
+   * EXPORT ALL ISSUES TO CSV
+   */
+  function exportIssuesCSV() {
+    if (!appState.issues || appState.issues.length === 0) {
+      showToast('No issues available to export.', 'warning');
+      return;
+    }
+
+    const headers = ['ID', 'Title', 'Category', 'Location', 'Severity', 'Supports', 'Days Pending', 'Priority Score', 'Status', 'Created At'];
+    const rows = appState.issues.map(i => [
+      i.id,
+      `"${(i.title || '').replace(/"/g, '""')}"`,
+      i.category,
+      `"${(i.location || '').replace(/"/g, '""')}"`,
+      i.severity,
+      i.supports,
+      i.daysPending,
+      i.priorityScore !== undefined ? i.priorityScore : calculatePriority(i),
+      i.status,
+      i.createdAt || ''
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `fixloop_campus_issues_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast('Campus issue report exported to CSV.', 'success');
+  }
+
   // ==========================================================================
   // 5. RENDERING & UI GENERATION
   // ==========================================================================
@@ -813,6 +955,18 @@
     document.getElementById('stat-awaiting').textContent = stats.awaiting;
     document.getElementById('stat-progress').textContent = stats.progress;
     document.getElementById('stat-resolved').textContent = stats.resolved;
+
+    // Update bulk clear closed button visibility
+    const purgeBtn = document.getElementById('purge-resolved-btn');
+    const resolvedNum = document.getElementById('resolved-count-num');
+    if (purgeBtn && resolvedNum) {
+      resolvedNum.textContent = stats.resolved;
+      if (stats.resolved > 0) {
+        purgeBtn.classList.remove('hidden');
+      } else {
+        purgeBtn.classList.add('hidden');
+      }
+    }
   }
 
   function renderStats() {
@@ -841,6 +995,7 @@
     }
 
     let filtered = appState.issues.filter(issue => {
+      if (currentFilters.hideClosed && issue.status === 'Verified Resolved') return false;
       if (currentFilters.status !== 'ALL' && issue.status !== currentFilters.status) return false;
       if (currentFilters.category !== 'ALL' && issue.category !== currentFilters.category) return false;
       if (currentFilters.severity !== 'ALL' && issue.severity !== currentFilters.severity) return false;
@@ -889,9 +1044,32 @@
     emptyState.classList.add('hidden');
     grid.innerHTML = issues.map(issue => createIssueCardHTML(issue)).join('');
 
+    // Attach card clicks
     grid.querySelectorAll('.issue-card').forEach(card => {
-      card.addEventListener('click', () => {
+      card.addEventListener('click', (e) => {
+        // Prevent opening modal if clicking +1 support or remove button
+        if (e.target.closest('.btn-card-support') || e.target.closest('.btn-card-archive')) {
+          return;
+        }
         openIssueDetail(card.dataset.id);
+      });
+    });
+
+    // Attach +1 support clicks
+    grid.querySelectorAll('.btn-card-support').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.supportId;
+        upvoteSupport(id);
+      });
+    });
+
+    // Attach card delete clicks
+    grid.querySelectorAll('.btn-card-archive').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.deleteId;
+        deleteIssue(id);
       });
     });
   }
@@ -901,6 +1079,7 @@
     const statusClass = getStatusClass(issue.status);
     const sevClass = getSeverityClass(issue.severity);
     const mediaHTML = getMediaThumbnailHTML(issue);
+    const isResolved = issue.status === 'Verified Resolved';
 
     return `
       <article class="issue-card" data-id="${escapeHTML(issue.id)}" tabindex="0" role="button" aria-label="View details for issue ${escapeHTML(issue.id)}: ${escapeHTML(issue.title)}">
@@ -947,10 +1126,23 @@
 
           <div class="card-footer">
             <span class="status-badge ${statusClass}">${escapeHTML(issue.status)}</span>
-            <span class="card-view-link">
-              Track &amp; Verify
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
-            </span>
+            <div class="card-actions-strip">
+              ${isResolved ? `
+                <button type="button" class="btn-card-archive" data-delete-id="${escapeHTML(issue.id)}" title="Remove this closed issue from the board">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                  Remove
+                </button>
+              ` : `
+                <button type="button" class="btn-card-support" data-support-id="${escapeHTML(issue.id)}" title="+1 Support this issue (Boosts priority by 3 points)">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg>
+                  +1 Support
+                </button>
+              `}
+              <span class="card-view-link">
+                Track
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+              </span>
+            </div>
           </div>
         </div>
       </article>
@@ -1171,8 +1363,16 @@
             <div class="vp-pip completed" title="Verification 1 Confirmed">✓</div>
             <div class="vp-pip completed" title="Verification 2 Confirmed">✓</div>
           </div>
+          <button type="button" class="btn-archive-resolved" id="btn-remove-resolved-issue">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            Remove / Archive Closed Issue
+          </button>
         </div>
       `;
+
+      document.getElementById('btn-remove-resolved-issue').addEventListener('click', () => {
+        deleteIssue(issue.id);
+      });
       return;
     }
 
@@ -1527,14 +1727,41 @@
       renderIssuesList();
     });
 
+    // Hide Closed Toggle
+    const hideClosedToggle = document.getElementById('hide-closed-toggle');
+    if (hideClosedToggle) {
+      hideClosedToggle.addEventListener('change', (e) => {
+        currentFilters.hideClosed = e.target.checked;
+        renderIssuesList();
+      });
+    }
+
+    // Purge Closed Issues Button
+    const purgeBtn = document.getElementById('purge-resolved-btn');
+    if (purgeBtn) {
+      purgeBtn.addEventListener('click', () => {
+        purgeResolvedIssues();
+      });
+    }
+
+    // Export CSV Button
+    const exportBtn = document.getElementById('export-csv-btn');
+    if (exportBtn) {
+      exportBtn.addEventListener('click', () => {
+        exportIssuesCSV();
+      });
+    }
+
     document.getElementById('reset-filters-btn').addEventListener('click', () => {
       currentFilters = {
         status: 'ALL',
         category: 'ALL',
         severity: 'ALL',
         search: '',
-        sort: 'priority'
+        sort: 'priority',
+        hideClosed: false
       };
+      if (hideClosedToggle) hideClosedToggle.checked = false;
       searchInput.value = '';
       clearSearchBtn.classList.add('hidden');
       document.getElementById('category-filter').value = 'ALL';

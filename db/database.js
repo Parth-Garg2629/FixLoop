@@ -339,6 +339,10 @@ function getAllIssues(filters = {}) {
     params.push(s, s, s, s);
   }
 
+  if (filters.hideClosed === true || filters.hideClosed === 'true') {
+    query += ` AND status != 'Verified Resolved'`;
+  }
+
   const rows = db.prepare(query).all(...params);
   const formatted = rows.map(formatIssueRow);
 
@@ -724,6 +728,56 @@ function addVolunteer(id, { name }) {
   return getIssueById(id);
 }
 
+/**
+ * Delete a single issue by ID
+ */
+function deleteIssue(id) {
+  const issue = getIssueById(id);
+  if (!issue) return null;
+
+  db.prepare('DELETE FROM issues WHERE id = ?').run(id);
+  return issue;
+}
+
+/**
+ * Delete all verified resolved / closed issues
+ */
+function deleteClosedIssues() {
+  const result = db.prepare(`DELETE FROM issues WHERE status = 'Verified Resolved'`).run();
+  return { deletedCount: result.changes };
+}
+
+/**
+ * Endorse / Upvote an issue directly (+1 Support)
+ */
+function supportIssue(id, supporterName = 'Campus Community Member') {
+  const issue = getIssueById(id);
+  if (!issue) return null;
+
+  const newSupports = issue.supports + 1;
+  db.prepare(`UPDATE issues SET supports = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(newSupports, id);
+
+  db.prepare(`
+    INSERT INTO reports (id, issue_id, reporter_name, category, location)
+    VALUES (?, ?, ?, ?, ?)
+  `).run('REP-' + Date.now(), id, supporterName, issue.category, issue.location);
+
+  db.prepare(`
+    INSERT INTO updates (id, issue_id, status, badge, remark, actor, time_label)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'UPD-' + Date.now(),
+    id,
+    issue.status,
+    'Endorsement Added',
+    `Community member ${supporterName} endorsed this issue (+3 priority score).`,
+    supporterName,
+    'Just now'
+  );
+
+  return getIssueById(id);
+}
+
 // Initialize on module load
 initDatabase();
 
@@ -742,5 +796,8 @@ module.exports = {
   verifyIssue,
   challengeIssue,
   addVolunteer,
+  deleteIssue,
+  deleteClosedIssues,
+  supportIssue,
   calculatePriorityScore
 };

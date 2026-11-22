@@ -285,6 +285,25 @@
                 </select>
               </div>
 
+              <!-- Hide Closed Toggle -->
+              <label class="toggle-control" title="Automatically hide complaints that are already verified & closed">
+                <input type="checkbox" id="hide-closed-toggle">
+                <span class="toggle-slider"></span>
+                <span class="toggle-text">Hide Closed</span>
+              </label>
+
+              <!-- Actions: Export CSV & Bulk Clear Closed -->
+              <div class="controls-action-group">
+                <button type="button" id="purge-resolved-btn" class="btn btn-outline btn-sm btn-clear-closed hidden" title="Remove all closed & verified issues from the database">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                  Remove Closed (<span id="resolved-count-num">0</span>)
+                </button>
+                <button type="button" id="export-csv-btn" class="btn btn-outline btn-sm" title="Export issues to CSV">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Export CSV
+                </button>
+              </div>
+
               <div class="feed-count" id="issues-count-label">Showing 6 issues</div>
             </div>
           </div>
